@@ -1,0 +1,108 @@
+import streamlit as st
+import pandas as pd
+import re
+from io import BytesIO
+
+st.set_page_config(page_title="Company Filter Tool", layout="wide")
+
+st.title("🔍 Company Filtering Tool")
+
+# 📥 Upload Excel
+uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
+
+if uploaded_file:
+    df = pd.read_excel(uploaded_file)
+    st.success("✅ File uploaded successfully!")
+
+    # 🔍 Extract companies
+    def extract_companies(cell, source, part_id):
+        result = []
+        if pd.isna(cell):
+            return result
+        entries = cell.split("|")
+        for entry in entries:
+            match = re.match(r'(.+?)\s*\((\d+)\)', entry.strip())
+            if match:
+                name, count = match.groups()
+                result.append({
+                    "PartID": part_id,
+                    "Source": source,
+                    "Company Name": name.strip(),
+                    "Count": int(count)
+                })
+        return result
+
+    # 🧱 Expand rows
+    all_rows = []
+    for _, row in df.iterrows():
+        part_id = row["PartID"]
+        all_rows += extract_companies(row["DropIn_A"], "DropIn_A", part_id)
+        all_rows += extract_companies(row["DropIn_B"], "DropIn_B", part_id)
+
+    expanded_df = pd.DataFrame(all_rows)
+
+    # 🔄 Pivot
+    pivot_df = expanded_df.pivot_table(index=["PartID", "Company Name"],
+                                       columns="Source",
+                                       values="Count",
+                                       aggfunc='sum').reset_index()
+    pivot_df = pivot_df.fillna(0)
+
+    # ✅ Classify companies
+    qualified_rows = []
+    below_threshold_rows = []
+
+    for _, row in pivot_df.iterrows():
+        part_id = row["PartID"]
+        company = row["Company Name"]
+        count_a = row.get("DropIn_A", 0)
+        count_b = row.get("DropIn_B", 0)
+        total = count_a + count_b
+
+        if count_a >= 5:
+            qualified_rows.append({
+                "PartID": part_id,
+                "Company Name": company,
+                "Final Count": count_a,
+                "Source": "DropIn_A"
+            })
+        elif total >= 5:
+            qualified_rows.append({
+                "PartID": part_id,
+                "Company Name": company,
+                "Final Count": total,
+                "Source": "Combined"
+            })
+        else:
+            below_threshold_rows.append({
+                "PartID": part_id,
+                "Company Name": company,
+                "Total Count": total,
+                "Source": "Below Threshold"
+            })
+
+    qualified_df = pd.DataFrame(qualified_rows)
+    below_df = pd.DataFrame(below_threshold_rows)
+
+    # 🧩 Format like input
+    a_rows, b_rows = [], []
+
+    for _, row in qualified_df.iterrows():
+        part_id = row["PartID"]
+        company = row["Company Name"]
+        count = row["Final Count"]
+        source = row["Source"]
+
+        if source == "DropIn_A":
+            a_rows.append((part_id, f"{company} ({count})"))
+        elif source == "Combined":
+            a_count = pivot_df.loc[(pivot_df['PartID'] == part_id) & (pivot_df['Company Name'] == company), 'DropIn_A'].values[0]
+            b_count = pivot_df.loc[(pivot_df['PartID'] == part_id) & (pivot_df['Company Name'] == company), 'DropIn_B'].values[0]
+
+            if a_count > 0:
+                a_rows.append((part_id, f"{company} ({a_count})"))
+            if b_count > 0:
+                b_rows.append((part_id, f"{company} ({b_count})"))
+
+    # 🧾 Final format
+    a_df = pd.DataFrame(a_
